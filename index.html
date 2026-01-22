@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Pose Detection v3 (Fix)</title>
+    <title>Pose Detection v4 (Strict)</title>
     <style>
         body {
             margin: 0;
@@ -39,19 +39,30 @@
             transform: scaleX(-1);
             z-index: 2;
         }
-        #status {
+        #status-box {
             position: absolute;
             top: 20px;
-            left: 20px;
+            left: 50%;
+            transform: translateX(-50%);
             z-index: 3;
+            width: 80%;
+            text-align: center;
+        }
+        #message {
+            background: rgba(0, 0, 0, 0.7);
             color: white;
-            font-size: 1rem;
-            background: rgba(0,0,0,0.6);
             padding: 15px;
-            border-radius: 10px;
-            white-space: pre-wrap;
-            font-family: sans-serif;
+            border-radius: 12px;
+            font-size: 1.2rem;
             font-weight: bold;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            border: 2px solid #FF0000; /* 기본 빨강 테두리 */
+        }
+        #debug {
+            margin-top: 5px;
+            font-size: 0.8rem;
+            color: #ddd;
+            text-shadow: 1px 1px 2px black;
         }
     </style>
     <!-- MediaPipe 라이브러리 -->
@@ -64,22 +75,25 @@
     <div class="container">
         <video id="input_video" playsinline></video>
         <canvas id="output_canvas"></canvas>
-        <div id="status">로딩중...</div>
+        <div id="status-box">
+            <div id="message">로딩중...</div>
+            <div id="debug"></div>
+        </div>
     </div>
 
     <script>
         const videoElement = document.getElementById('input_video');
         const canvasElement = document.getElementById('output_canvas');
         const canvasCtx = canvasElement.getContext('2d');
-        const statusDiv = document.getElementById('status');
+        const messageDiv = document.getElementById('message');
+        const debugDiv = document.getElementById('debug');
 
-        // [중요] 좌표를 픽셀 단위로 변환하는 함수
-        // MediaPipe는 0~1 사이의 값을 주는데, 모바일 화면 비율(세로가 김)을 반영해야 각도가 정확함
+        // 좌표 변환 (반응형 대응)
         function toPixel(landmark, width, height) {
             return { x: landmark.x * width, y: landmark.y * height };
         }
 
-        // 1. 세 점 사이의 각도 계산 (픽셀 좌표 기준)
+        // 각도 계산
         function calculateAngle(a, b, c) {
             const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
             let angle = Math.abs(radians * 180.0 / Math.PI);
@@ -87,22 +101,17 @@
             return angle;
         }
 
-        // 2. 수직 편차 계산 (Y축 기준)
+        // 수직 편차 계산
         function calculateVerticalDeviation(a, b) {
-            // X축의 차이가 적을수록 수직에 가까움
             const dx = Math.abs(b.x - a.x);
             const dy = Math.abs(b.y - a.y);
-            
-            // 아크탄젠트로 각도 구하기 (0도에 가까울수록 수직)
             const radians = Math.atan2(dx, dy); 
             return radians * 180.0 / Math.PI;
         }
 
         function onResults(results) {
-            // 화면 크기 가져오기
             const width = videoElement.videoWidth;
             const height = videoElement.videoHeight;
-            
             canvasElement.width = width;
             canvasElement.height = height;
 
@@ -111,82 +120,71 @@
 
             if (results.poseLandmarks) {
                 const rawLm = results.poseLandmarks;
-                
-                // 모든 좌표를 픽셀 단위로 변환 (중요!)
-                // 11:왼어깨, 12:오른어깨, 13:왼팔꿈치, 14:오른팔꿈치, 15:왼손목, 16:오른손목
-                // 23:왼엉덩, 24:오른엉덩, 25:왼무릎, 26:오른무릎, 27:왼발목, 28:오른발목
                 const p = {};
                 [11,12,13,14,15,16,23,24,25,26,27,28].forEach(index => {
                     p[index] = toPixel(rawLm[index], width, height);
                 });
 
-                // --- [설정값] 이 값을 조절하여 난이도 변경 가능 ---
-                const STRAIGHT_THRESHOLD = 165; // 팔, 다리가 펴졌다고 판단하는 각도 (클수록 엄격)
-                const VERTICAL_THRESHOLD = 10;  // 수직에서 벗어나도 되는 허용 오차 (작을수록 엄격)
+                // === [설정값] 엄격도 조절 ===
+                const ARM_STRAIGHT_MIN = 160;   // 팔 펴짐 각도 (160도 이상)
+                const KNEE_STRAIGHT_MIN = 165;  // 무릎 펴짐 각도 (165도 이상)
+                const BODY_VERTICAL_MAX = 15;   // 몸 수직 기울기 허용오차 (15도 이내)
 
-                // 1. 팔 펴짐 확인
-                const leftArmAngle = calculateAngle(p[11], p[13], p[15]);
-                const rightArmAngle = calculateAngle(p[12], p[14], p[16]);
-                const isLeftArmStraight = leftArmAngle > STRAIGHT_THRESHOLD;
-                const isRightArmStraight = rightArmAngle > STRAIGHT_THRESHOLD;
-
-                // 2. 몸 수직 확인 (어깨-엉덩이 수직 AND 엉덩이-발목 수직 AND 무릎 펴짐)
+                // 1. 몸(Body) 검사: 왼쪽이나 오른쪽 중 한쪽이라도 완벽하게 서 있으면 인정
                 
-                // 왼쪽
+                // 왼쪽 몸 체크
                 const leftTorsoDev = calculateVerticalDeviation(p[11], p[23]);
                 const leftLegDev = calculateVerticalDeviation(p[23], p[27]);
                 const leftKneeAngle = calculateAngle(p[23], p[25], p[27]);
-                // 몸통과 다리가 모두 수직 범위 내(10도)이고 무릎이 펴져야 함
-                const isLeftBodyVertical = (leftTorsoDev < VERTICAL_THRESHOLD) && 
-                                           (leftLegDev < VERTICAL_THRESHOLD) && 
-                                           (leftKneeAngle > STRAIGHT_THRESHOLD);
+                const leftBodyOk = (leftTorsoDev < BODY_VERTICAL_MAX) && 
+                                   (leftLegDev < BODY_VERTICAL_MAX) && 
+                                   (leftKneeAngle > KNEE_STRAIGHT_MIN);
 
-                // 오른쪽
+                // 오른쪽 몸 체크
                 const rightTorsoDev = calculateVerticalDeviation(p[12], p[24]);
                 const rightLegDev = calculateVerticalDeviation(p[24], p[28]);
                 const rightKneeAngle = calculateAngle(p[24], p[26], p[28]);
-                const isRightBodyVertical = (rightTorsoDev < VERTICAL_THRESHOLD) && 
-                                            (rightLegDev < VERTICAL_THRESHOLD) && 
-                                            (rightKneeAngle > STRAIGHT_THRESHOLD);
+                const rightBodyOk = (rightTorsoDev < BODY_VERTICAL_MAX) && 
+                                    (rightLegDev < BODY_VERTICAL_MAX) && 
+                                    (rightKneeAngle > KNEE_STRAIGHT_MIN);
 
+                const isBodyReady = leftBodyOk || rightBodyOk;
 
-                // --- [판단 및 상태 표시] ---
-                let color = '#FF0000'; // 기본 빨강
-                let statusText = "자세를 취해주세요";
-                let debugText = []; // 디버깅용 메시지
+                // 2. 팔(Arm) 검사: 둘 중 하나라도 펴져 있으면 인정
+                const leftArmAngle = calculateAngle(p[11], p[13], p[15]);
+                const rightArmAngle = calculateAngle(p[12], p[14], p[16]);
+                const isArmReady = (leftArmAngle > ARM_STRAIGHT_MIN) || (rightArmAngle > ARM_STRAIGHT_MIN);
 
-                let success = false;
+                // === [최종 판정 로직] ===
+                // 두 조건이 모두 True여야 함
+                const isSuccess = isBodyReady && isArmReady;
 
-                // 조건 1: 몸이 1자 (수직)
-                if (isLeftBodyVertical || isRightBodyVertical) {
-                    success = true;
-                    statusText = "성공: 몸이 수직입니다!";
-                    debugText.push("몸 수직 감지됨");
-                }
+                let mainText = "";
+                let subText = "";
+                let color = "#FF0000"; // 기본 빨강
 
-                // 조건 2: 팔이 1자 (수평이든 수직이든 쭉 펴짐)
-                if (isLeftArmStraight || isRightArmStraight) {
-                    // 이미 몸 때문에 성공했더라도 메시지 추가
-                    if(success) {
-                        statusText = "성공: 몸과 팔이 완벽합니다!";
-                    } else {
-                        success = true;
-                        statusText = "성공: 팔을 폈습니다!";
-                    }
-                    if(isLeftArmStraight) debugText.push(`왼팔 펴짐(${Math.round(leftArmAngle)}°)`);
-                    if(isRightArmStraight) debugText.push(`오른팔 펴짐(${Math.round(rightArmAngle)}°)`);
-                }
-
-                if (success) {
-                    color = '#00FF00'; // 초록
+                if (isSuccess) {
+                    color = "#00FF00"; // 초록
+                    mainText = "완벽합니다!";
+                    subText = "몸 수직 O / 팔 펴짐 O";
                 } else {
-                    // 실패 시 원인 분석 (디버깅용)
-                    if(leftArmAngle > 150) debugText.push(`왼팔 조금 굽음(${Math.round(leftArmAngle)}°)`);
-                    if(leftTorsoDev < 30) debugText.push(`몸 기울기(${Math.round(leftTorsoDev)}°)`);
+                    // 실패 원인 분석
+                    if (!isBodyReady) {
+                        mainText = "몸을 수직으로 세워주세요";
+                        subText = `기울기: ${Math.round(Math.min(leftTorsoDev, rightTorsoDev))}° (목표: 15°이하)`;
+                    } else if (!isArmReady) {
+                        mainText = "몸은 좋습니다! 팔을 쭉 펴세요";
+                        subText = `팔 각도: ${Math.round(Math.max(leftArmAngle, rightArmAngle))}° (목표: 160°이상)`;
+                    } else {
+                        mainText = "자세를 취해주세요";
+                    }
                 }
 
-                statusDiv.innerHTML = `<span style="font-size:1.2em">${statusText}</span><br><br><span style="font-size:0.8em; opacity:0.8">${debugText.join('\n')}</span>`;
-                statusDiv.style.color = color;
+                // 화면 표시 업데이트
+                messageDiv.innerText = mainText;
+                messageDiv.style.borderColor = color;
+                messageDiv.style.color = isSuccess ? "#00FF00" : "#FFFFFF";
+                debugDiv.innerText = subText;
 
                 // 스켈레톤 그리기
                 drawConnectors(canvasCtx, results.poseLandmarks, POSE_CONNECTIONS,
@@ -215,12 +213,12 @@
             onFrame: async () => {
                 await pose.send({image: videoElement});
             },
-            width: 1280, // 입력 해상도
+            width: 1280,
             height: 720
         });
 
         camera.start().then(() => {
-            statusDiv.innerText = "카메라 시작됨";
+            messageDiv.innerText = "카메라 시작됨\n전신이 나오게 서주세요";
         });
     </script>
 </body>
