@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Pulling Sound Effect</title>
+    <title>Elbow Raising Sound</title>
     <style>
         body {
             margin: 0;
@@ -46,21 +46,21 @@
             pointer-events: none;
         }
         #message {
-            background: rgba(0, 0, 0, 0.9);
+            background: rgba(0, 0, 0, 0.8);
             color: white;
             padding: 15px;
             border: 2px solid #FF0000;
-            font-size: 1rem;
+            font-size: 1.2rem;
             font-weight: bold;
             text-transform: uppercase;
         }
         #debug {
             margin-top: 5px;
-            font-size: 0.8rem;
-            color: #ccc;
-            background: black;
+            font-size: 0.9rem;
+            color: #00FF00;
+            background: rgba(0,0,0,0.7);
             display: inline-block;
-            padding: 2px 5px;
+            padding: 5px 10px;
         }
 
         #switch-btn {
@@ -142,30 +142,20 @@
         let pose = null;
         let isRunning = false;
 
-        // 당기기 감지 변수
-        let prevPullDist = 0; // 이전 (손목-어깨) 거리
+        // 팔꿈치 감지 변수
+        let prevElbowY = 0; // 이전 팔꿈치 Y좌표
         let lastPullTime = 0;
 
         function toPixel(landmark, width, height) {
             return { x: landmark.x * width, y: landmark.y * height };
         }
 
-        // 거리 계산 함수
-        function getDistance(p1, p2) {
-            return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
-        }
-
-        // 각도 계산 함수들
+        // 각도 계산 함수들 (상체용)
         function calculateAngle(a, b, c) {
             const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
             let angle = Math.abs(radians * 180.0 / Math.PI);
             if (angle > 180.0) angle = 360 - angle;
             return angle;
-        }
-        function calculateVerticalDeviation(a, b) {
-            const dx = Math.abs(b.x - a.x);
-            const dy = Math.abs(b.y - a.y);
-            return Math.atan2(dx, dy) * 180.0 / Math.PI;
         }
         function calculateHorizontalDeviation(a, b) {
             const dy = b.y - a.y;
@@ -175,7 +165,7 @@
             return angle;
         }
 
-        // 스틱맨 그리기
+        // 스틱맨 그리기 (상체만 강조)
         function drawLine(ctx, p1, p2, color, width) {
             if (!p1 || !p2) return;
             ctx.beginPath();
@@ -188,23 +178,26 @@
 
         function drawStickFigure(ctx, p, color) {
             const lineWidth = 6;
+            // 몸통 중심
+            if (p[11] && p[12]) {
+                drawLine(ctx, p[11], p[12], color, lineWidth);
+            }
+            // 왼팔
+            if (p[11] && p[13] && p[15]) {
+                drawLine(ctx, p[11], p[13], color, lineWidth);
+                drawLine(ctx, p[13], p[15], color, lineWidth);
+            }
+            // 오른팔
+            if (p[12] && p[14] && p[16]) {
+                drawLine(ctx, p[12], p[14], color, lineWidth);
+                drawLine(ctx, p[14], p[16], color, lineWidth);
+            }
+            // 머리 연결 (옵션)
             if (p[0] && p[11] && p[12]) {
                 const midX = (p[11].x + p[12].x) / 2;
                 const midY = (p[11].y + p[12].y) / 2;
                 drawLine(ctx, {x: midX, y: midY}, p[0], color, lineWidth);
             }
-            drawLine(ctx, p[11], p[12], color, lineWidth);
-            drawLine(ctx, p[11], p[23], color, lineWidth);
-            drawLine(ctx, p[12], p[24], color, lineWidth);
-            drawLine(ctx, p[23], p[24], color, lineWidth);
-            drawLine(ctx, p[11], p[13], color, lineWidth);
-            drawLine(ctx, p[13], p[15], color, lineWidth);
-            drawLine(ctx, p[12], p[14], color, lineWidth);
-            drawLine(ctx, p[14], p[16], color, lineWidth);
-            drawLine(ctx, p[23], p[25], color, lineWidth);
-            drawLine(ctx, p[25], p[27], color, lineWidth);
-            drawLine(ctx, p[24], p[26], color, lineWidth);
-            drawLine(ctx, p[26], p[28], color, lineWidth);
         }
 
         function onResults(results) {
@@ -221,58 +214,38 @@
             if (results.poseLandmarks) {
                 const rawLm = results.poseLandmarks;
                 const p = {};
-                [0, 11,12,13,14,15,16,23,24,25,26,27,28].forEach(idx => {
+                // 상체 랜드마크만 사용 (0:코, 11/12:어깨, 13/14:팔꿈치, 15/16:손목)
+                [0, 11,12,13,14,15,16].forEach(idx => {
                     if(rawLm[idx]) p[idx] = toPixel(rawLm[idx], width, height);
                 });
 
                 // === 설정값 ===
-                const BODY_TILT_LIMIT = 10;      
-                const HEAD_TILT_LIMIT = 15;      
-                const ARM_HORIZON_LIMIT = 20;    
-                const ELBOW_STRAIGHT_MIN = 160; 
-                const KNEE_STRAIGHT_MIN = 165;  
+                const ARM_HORIZON_LIMIT = 25;    // 팔이 펴졌는지(수평) 판단하는 오차 허용도
+                const ELBOW_STRAIGHT_MIN = 150;  // 팔이 펴졌다고 판단하는 최소 각도
 
                 let isSuccess = false;
                 let failReason = "";
-                let pullArmIndex = 0; // 1:왼팔당김(굽힘), 2:오른팔당김(굽힘)
+                let activeArm = 0; // 1:왼팔 굽힘(오른팔 폄), 2:오른팔 굽힘(왼팔 폄)
 
-                if(p[0] && p[11] && p[23] && p[27] && p[12] && p[24] && p[28]) {
+                // 기본 상체 포인트들이 다 보여야 함
+                if(p[11] && p[12] && p[13] && p[14] && p[15] && p[16]) {
                     
-                    // 1. 머리 수직
-                    const midShoulder = { x: (p[11].x + p[12].x)/2, y: (p[11].y + p[12].y)/2 };
-                    const headTilt = calculateVerticalDeviation(midShoulder, p[0]);
-                    const isHeadStraight = headTilt < HEAD_TILT_LIMIT;
-
-                    // 2. 몸 수직
-                    const lTorso = calculateVerticalDeviation(p[11], p[23]);
-                    const lLeg = calculateVerticalDeviation(p[23], p[27]);
-                    const lKnee = calculateAngle(p[23], p[25], p[27]);
-                    const rTorso = calculateVerticalDeviation(p[12], p[24]);
-                    const rLeg = calculateVerticalDeviation(p[24], p[28]);
-                    const rKnee = calculateAngle(p[24], p[26], p[28]);
-
-                    const lBodyOk = (lTorso < BODY_TILT_LIMIT) && (lLeg < BODY_TILT_LIMIT) && (lKnee > KNEE_STRAIGHT_MIN);
-                    const rBodyOk = (rTorso < BODY_TILT_LIMIT) && (rLeg < BODY_TILT_LIMIT) && (rKnee > KNEE_STRAIGHT_MIN);
-                    const isBodyStraight = lBodyOk || rBodyOk;
-
-                    // 3. 팔 검사
+                    // 각도 계산 (팔 펴짐 여부)
                     const lHorizon = calculateHorizontalDeviation(p[11], p[15]);
                     const rHorizon = calculateHorizontalDeviation(p[12], p[16]);
-                    const lElbow = calculateAngle(p[11], p[13], p[15]);
-                    const rElbow = calculateAngle(p[12], p[14], p[16]);
+                    const lElbowAngle = calculateAngle(p[11], p[13], p[15]);
+                    const rElbowAngle = calculateAngle(p[12], p[14], p[16]);
 
-                    const isLeftStraight = (lHorizon < ARM_HORIZON_LIMIT) && (lElbow > ELBOW_STRAIGHT_MIN);
-                    const isRightStraight = (rHorizon < ARM_HORIZON_LIMIT) && (rElbow > ELBOW_STRAIGHT_MIN);
+                    const isLeftStraight = (lHorizon < ARM_HORIZON_LIMIT) && (lElbowAngle > ELBOW_STRAIGHT_MIN);
+                    const isRightStraight = (rHorizon < ARM_HORIZON_LIMIT) && (rElbowAngle > ELBOW_STRAIGHT_MIN);
 
-                    // 성공 판단
-                    if (!isHeadStraight) failReason = "HEAD TILTED";
-                    else if (!isBodyStraight) failReason = "BODY TILTED";
-                    else if (isLeftStraight && !isRightStraight) {
+                    // 한쪽 팔은 펴고, 다른 쪽은 자유(굽힘) 상태여야 함
+                    if (isLeftStraight && !isRightStraight) {
                         isSuccess = true;
-                        pullArmIndex = 2; // 오른팔이 굽은 팔 (당길 대상)
+                        activeArm = 2; // 오른팔이 움직이는 팔
                     } else if (isRightStraight && !isLeftStraight) {
                         isSuccess = true;
-                        pullArmIndex = 1; // 왼팔이 굽은 팔 (당길 대상)
+                        activeArm = 1; // 왼팔이 움직이는 팔
                     } else if (isLeftStraight && isRightStraight) {
                         failReason = "BEND ONE ARM";
                     } else {
@@ -283,7 +256,7 @@
                 let color = isSuccess ? "#00FF00" : "#FF0000";
 
                 if (isSuccess) {
-                    messageDiv.innerText = "SUCCESS (PULL!)";
+                    messageDiv.innerText = "RAISE ELBOW UP!";
                     messageDiv.style.borderColor = "#00FF00";
                     messageDiv.style.color = "#00FF00";
                     
@@ -292,61 +265,72 @@
                         isSuccessPlaying = true;
                     }
 
-                    // === 🔥 [수정된 부분: 손목과 어깨 거리 감소 감지] 🔥 ===
-                    let currentPullDist = 0;
+                    // === 🔥 [핵심 변경: 팔꿈치가 어깨보다 높고, 올라갈 때 소리] 🔥 ===
+                    let currentElbowY = 0;
+                    let shoulderY = 0;
+                    let isElbowAboveShoulder = false;
+
+                    // 좌표계: 0이 맨 위, 값이 커질수록 아래.
+                    // 따라서 "높다" = Y값이 "작다"
                     
-                    // 왼팔이 굽은 상태 -> 왼쪽 손목(15)과 왼쪽 어깨(11) 거리 측정
-                    if (pullArmIndex === 1) {
-                        currentPullDist = getDistance(p[15], p[11]);
+                    if (activeArm === 1) { // 왼팔이 움직임
+                        currentElbowY = p[13].y;
+                        shoulderY = p[11].y;
+                        if (currentElbowY < shoulderY) isElbowAboveShoulder = true;
+                    } else if (activeArm === 2) { // 오른팔이 움직임
+                        currentElbowY = p[14].y;
+                        shoulderY = p[12].y;
+                        if (currentElbowY < shoulderY) isElbowAboveShoulder = true;
                     }
-                    // 오른팔이 굽은 상태 -> 오른쪽 손목(16)과 오른쪽 어깨(12) 거리 측정
-                    if (pullArmIndex === 2) {
-                        currentPullDist = getDistance(p[16], p[12]);
-                    }
 
-                    if (prevPullDist > 0) {
-                        // 이전 거리 - 현재 거리
-                        // 값이 양수(+)면 거리가 줄어듦 (당김)
-                        // 값이 음수(-)면 거리가 늘어남 (폅)
-                        const diff = prevPullDist - currentPullDist;
+                    if (isElbowAboveShoulder) {
+                        // 이전 프레임보다 Y값이 작아졌다면 = 위로 올라가고 있다는 뜻
+                        // prevElbowY(큼) - currentElbowY(작음) > 0
+                        
+                        if (prevElbowY !== 0) {
+                            const diff = prevElbowY - currentElbowY; // 양수면 위로 올라가는 중
 
-                        // 0.5픽셀 이상 줄어들 때만 소리 재생
-                        if (diff > 0.5) {
-                            const now = Date.now();
-                            // 당기는 속도(diff)에 따라 소리 재생 간격 조절
-                            let delay = Math.max(80, 500 - (diff * 40)); 
+                            // diff > 2.0 : 약간의 떨림 무시 (Threshold)
+                            if (diff > 2.0) {
+                                const now = Date.now();
+                                
+                                // 속도에 따른 딜레이 계산
+                                // diff가 클수록(빠를수록) delay는 작게(빠르게)
+                                // 예: diff가 10이면 500 - 150 = 350ms, diff가 20이면 500 - 300 = 200ms
+                                let delay = Math.max(60, 600 - (diff * 15)); 
 
-                            if (now - lastPullTime > delay) {
-                                const sound = pullingAudio.cloneNode();
-                                sound.volume = 1.0; 
-                                sound.play().catch(()=>{});
-                                lastPullTime = now;
+                                if (now - lastPullTime > delay) {
+                                    const sound = pullingAudio.cloneNode();
+                                    sound.volume = 1.0; 
+                                    sound.play().catch(()=>{});
+                                    lastPullTime = now;
+                                }
+                                debugDiv.innerText = `RISING SPEED: ${diff.toFixed(1)}`;
+                            } else if (diff < -2.0) {
+                                debugDiv.innerText = "LOWERING...";
+                            } else {
+                                debugDiv.innerText = "HOLD HIGH";
                             }
-                            debugDiv.innerText = `PULLING: ${diff.toFixed(1)}`;
-                        } else if (diff < -0.5) {
-                            debugDiv.innerText = "EXTENDING...";
-                        } else {
-                            debugDiv.innerText = "HOLDING...";
                         }
                     } else {
-                        debugDiv.innerText = "READY TO PULL";
+                        debugDiv.innerText = "ELBOW TOO LOW";
                     }
-                    
-                    // 현재 길이를 저장
-                    prevPullDist = currentPullDist;
+
+                    // 현재 Y좌표 저장
+                    prevElbowY = currentElbowY;
 
                 } else {
-                    messageDiv.innerText = failReason || "FIX POSTURE";
+                    messageDiv.innerText = failReason || "CHECK ARM";
                     messageDiv.style.borderColor = "#FF0000";
                     messageDiv.style.color = "#FFFFFF";
-                    debugDiv.innerText = "STAND STRAIGHT";
+                    debugDiv.innerText = "POSTURE INVALID";
 
                     if (isSuccessPlaying) {
                         successAudio.pause();
                         successAudio.currentTime = 0;
                         isSuccessPlaying = false;
                     }
-                    prevPullDist = 0; // 실패하면 거리 초기화
+                    prevElbowY = 0; // 초기화
                 }
 
                 drawStickFigure(canvasCtx, p, color);
