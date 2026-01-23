@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Archery Pose Sound</title>
+    <title>Forearm Shortening Sound</title>
     <style>
         body {
             margin: 0;
@@ -34,7 +34,7 @@
         video { z-index: 1; }
         canvas { z-index: 2; }
 
-        /* UI 스타일 */
+        /* UI 스타일: 각지게 */
         #status-box {
             position: absolute;
             top: 20px;
@@ -117,7 +117,7 @@
         <button id="switch-btn">CAM SWITCH</button>
 
         <div id="start-overlay">
-            <div style="text-align:center">UPLOAD 'pulling.mp3' & 'success.mp3'<br>ARCHERY MODE</div>
+            <div style="text-align:center">UPLOAD 'pulling.mp3' & 'success.mp3'<br>BEFORE START</div>
             <div id="start-btn">TOUCH TO START</div>
         </div>
     </div>
@@ -131,9 +131,10 @@
         const switchBtn = document.getElementById('switch-btn');
         const startOverlay = document.getElementById('start-overlay');
 
+        // 오디오 객체
         const successAudio = new Audio('success.mp3');
         successAudio.loop = true; 
-        const pullingAudio = new Audio('pulling.mp3'); 
+        const pullingAudio = new Audio('pulling.mp3'); // "디"
         
         let isSuccessPlaying = false;
         let isFrontCamera = true;
@@ -141,17 +142,20 @@
         let pose = null;
         let isRunning = false;
 
-        let prevForearmDist = 0;
+        // 당기기 감지 변수
+        let prevForearmDist = 0; // 이전 하박 길이 (손목-팔꿈치)
         let lastPullTime = 0;
 
         function toPixel(landmark, width, height) {
             return { x: landmark.x * width, y: landmark.y * height };
         }
 
+        // 거리 계산 함수
         function getDistance(p1, p2) {
             return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
         }
 
+        // 각도 계산 함수들
         function calculateAngle(a, b, c) {
             const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
             let angle = Math.abs(radians * 180.0 / Math.PI);
@@ -171,6 +175,7 @@
             return angle;
         }
 
+        // 스틱맨 그리기
         function drawLine(ctx, p1, p2, color, width) {
             if (!p1 || !p2) return;
             ctx.beginPath();
@@ -229,7 +234,7 @@
 
                 let isSuccess = false;
                 let failReason = "";
-                let pullArmIndex = 0; 
+                let pullArmIndex = 0; // 1:왼팔당김, 2:오른팔당김 (0:없음)
 
                 if(p[0] && p[11] && p[23] && p[27] && p[12] && p[24] && p[28]) {
                     
@@ -246,22 +251,11 @@
                     const rLeg = calculateVerticalDeviation(p[24], p[28]);
                     const rKnee = calculateAngle(p[24], p[26], p[28]);
 
-                    const isBodyStraight = (lTorso < BODY_TILT_LIMIT && lLeg < BODY_TILT_LIMIT && lKnee > KNEE_STRAIGHT_MIN) ||
-                                           (rTorso < BODY_TILT_LIMIT && rLeg < BODY_TILT_LIMIT && rKnee > KNEE_STRAIGHT_MIN);
+                    const lBodyOk = (lTorso < BODY_TILT_LIMIT) && (lLeg < BODY_TILT_LIMIT) && (lKnee > KNEE_STRAIGHT_MIN);
+                    const rBodyOk = (rTorso < BODY_TILT_LIMIT) && (rLeg < BODY_TILT_LIMIT) && (rKnee > KNEE_STRAIGHT_MIN);
+                    const isBodyStraight = lBodyOk || rBodyOk;
 
-                    // 3. 팔꿈치 위치 검사 (양궁 자세: 팔꿈치는 몸 밖으로 나가야 함)
-                    // 몸통의 좌우 경계 (어깨 기준)
-                    const bodyMinX = Math.min(p[11].x, p[12].x); // 왼쪽(화면상) 끝
-                    const bodyMaxX = Math.max(p[11].x, p[12].x); // 오른쪽(화면상) 끝
-                    
-                    // 팔꿈치가 몸통 범위(bodyMinX ~ bodyMaxX) 안에 있는지 확인
-                    const isLeftElbowIn = (p[13].x > bodyMinX && p[13].x < bodyMaxX);
-                    const isRightElbowIn = (p[14].x > bodyMinX && p[14].x < bodyMaxX);
-
-                    // 두 팔꿈치가 모두 몸통 안에 있으면 -> 실패 (Guard 자세나 움츠린 자세)
-                    const isElbowsTooIn = isLeftElbowIn && isRightElbowIn;
-
-                    // 4. 팔 수평/펴짐 검사
+                    // 3. 팔 검사
                     const lHorizon = calculateHorizontalDeviation(p[11], p[15]);
                     const rHorizon = calculateHorizontalDeviation(p[12], p[16]);
                     const lElbow = calculateAngle(p[11], p[13], p[15]);
@@ -270,27 +264,26 @@
                     const isLeftStraight = (lHorizon < ARM_HORIZON_LIMIT) && (lElbow > ELBOW_STRAIGHT_MIN);
                     const isRightStraight = (rHorizon < ARM_HORIZON_LIMIT) && (rElbow > ELBOW_STRAIGHT_MIN);
 
-                    // === 종합 판단 ===
+                    // 성공 판단
                     if (!isHeadStraight) failReason = "HEAD TILTED";
                     else if (!isBodyStraight) failReason = "BODY TILTED";
-                    else if (isElbowsTooIn) failReason = "OPEN ELBOWS"; // 팔꿈치를 밖으로 벌리세요
                     else if (isLeftStraight && !isRightStraight) {
                         isSuccess = true;
-                        pullArmIndex = 2; // 오른팔 당김
+                        pullArmIndex = 2; // 오른팔이 굽은 팔 (당길 대상)
                     } else if (isRightStraight && !isLeftStraight) {
                         isSuccess = true;
-                        pullArmIndex = 1; // 왼팔 당김
+                        pullArmIndex = 1; // 왼팔이 굽은 팔 (당길 대상)
                     } else if (isLeftStraight && isRightStraight) {
-                        failReason = "BEND DRAW ARM"; // 당기는 팔은 굽혀야 함
+                        failReason = "BEND ONE ARM";
                     } else {
-                        failReason = "RAISE BOW ARM"; // 활 든 팔은 펴야 함
+                        failReason = "RAISE ONE ARM";
                     }
                 }
 
                 let color = isSuccess ? "#00FF00" : "#FF0000";
 
                 if (isSuccess) {
-                    messageDiv.innerText = "READY TO SHOOT";
+                    messageDiv.innerText = "SUCCESS (PULL!)";
                     messageDiv.style.borderColor = "#00FF00";
                     messageDiv.style.color = "#00FF00";
                     
@@ -299,16 +292,23 @@
                         isSuccessPlaying = true;
                     }
 
-                    // === 당기기(Forearm Shortening) 로직 ===
+                    // === 🔥 [핵심 변경: 하박 길이 줄어듦 감지] 🔥 ===
                     let currentForearmDist = 0;
+                    
+                    // 왼팔 당김 (굽은 팔이 왼쪽일 때) -> 왼쪽 하박 길이 측정 (손목15 - 팔꿈치13)
                     if (pullArmIndex === 1) currentForearmDist = getDistance(p[15], p[13]);
+                    // 오른팔 당김 (굽은 팔이 오른쪽일 때) -> 오른쪽 하박 길이 측정 (손목16 - 팔꿈치14)
                     if (pullArmIndex === 2) currentForearmDist = getDistance(p[16], p[14]);
 
                     if (prevForearmDist > 0) {
+                        // 이전 길이보다 현재 길이가 짧아졌으면 = 줄어듦 = 당김
                         const diff = prevForearmDist - currentForearmDist;
-                        // 0.5픽셀 이상 줄어들면 당기는 중
+
+                        // diff가 양수면 줄어들고 있다는 뜻
+                        // 0.5픽셀 이상 줄어들 때만 반응 (떨림 방지)
                         if (diff > 0.5) {
                             const now = Date.now();
+                            // 많이 줄어들수록(diff가 클수록) 딜레이 작게 = 빠르게 재생
                             let delay = Math.max(80, 500 - (diff * 40)); 
 
                             if (now - lastPullTime > delay) {
@@ -317,27 +317,29 @@
                                 sound.play().catch(()=>{});
                                 lastPullTime = now;
                             }
-                            debugDiv.innerText = `DRAWING: ${diff.toFixed(1)}`;
+                            debugDiv.innerText = `PULL SPEED: ${diff.toFixed(1)}`;
                         } else {
-                            debugDiv.innerText = "HOLDING";
+                            debugDiv.innerText = "HOLDING...";
                         }
                     } else {
-                        debugDiv.innerText = "SET";
+                        debugDiv.innerText = "READY TO PULL";
                     }
+                    
+                    // 현재 길이를 저장
                     prevForearmDist = currentForearmDist;
 
                 } else {
-                    messageDiv.innerText = failReason || "ARCHERY STANCE";
+                    messageDiv.innerText = failReason || "FIX POSTURE";
                     messageDiv.style.borderColor = "#FF0000";
                     messageDiv.style.color = "#FFFFFF";
-                    debugDiv.innerText = "FIX POSTURE";
+                    debugDiv.innerText = "STAND STRAIGHT";
 
                     if (isSuccessPlaying) {
                         successAudio.pause();
                         successAudio.currentTime = 0;
                         isSuccessPlaying = false;
                     }
-                    prevForearmDist = 0;
+                    prevForearmDist = 0; // 실패하면 길이 초기화
                 }
 
                 drawStickFigure(canvasCtx, p, color);
