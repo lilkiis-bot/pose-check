@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Stickman Pose Audio</title>
+    <title>Archery Pose Sound</title>
     <style>
         body {
             margin: 0;
@@ -13,7 +13,7 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            font-family: 'Courier New', Courier, monospace; /* 각진 폰트 */
+            font-family: 'Courier New', Courier, monospace;
         }
         .container {
             position: relative;
@@ -34,7 +34,7 @@
         video { z-index: 1; }
         canvas { z-index: 2; }
 
-        /* UI 스타일: 둥근 느낌 제거, 테두리 각지게 */
+        /* UI 스타일 */
         #status-box {
             position: absolute;
             top: 20px;
@@ -49,7 +49,7 @@
             background: rgba(0, 0, 0, 0.9);
             color: white;
             padding: 15px;
-            border: 2px solid #FF0000; /* 각진 테두리 */
+            border: 2px solid #FF0000;
             font-size: 1rem;
             font-weight: bold;
             text-transform: uppercase;
@@ -63,7 +63,6 @@
             padding: 2px 5px;
         }
 
-        /* 버튼 스타일: 텍스트만 사용, 각지게 */
         #switch-btn {
             position: absolute;
             bottom: 30px;
@@ -78,16 +77,11 @@
             font-size: 1rem;
             cursor: pointer;
         }
-        #switch-btn:active {
-            background-color: white;
-            color: black;
-        }
 
-        /* 시작 오버레이 (소리 권한용) */
         #start-overlay {
             position: absolute;
             top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.9);
+            background: rgba(0,0,0,0.95);
             z-index: 10;
             display: flex;
             flex-direction: column;
@@ -116,16 +110,15 @@
         <canvas id="output_canvas" class="mirror"></canvas>
         
         <div id="status-box">
-            <div id="message">WAITING FOR CAMERA...</div>
+            <div id="message">WAITING...</div>
             <div id="debug"></div>
         </div>
 
         <button id="switch-btn">CAM SWITCH</button>
 
-        <!-- 소리 재생 권한을 얻기 위한 시작 화면 -->
         <div id="start-overlay">
-            <div>TOUCH TO START</div>
-            <div id="start-btn">START</div>
+            <div style="text-align:center">UPLOAD 'pulling.mp3' & 'success.mp3'<br>ARCHERY MODE</div>
+            <div id="start-btn">TOUCH TO START</div>
         </div>
     </div>
 
@@ -138,47 +131,46 @@
         const switchBtn = document.getElementById('switch-btn');
         const startOverlay = document.getElementById('start-overlay');
 
-        // === [소리 설정] ===
-        // 같은 폴더에 success.mp3 파일이 있어야 합니다.
         const successAudio = new Audio('success.mp3');
-        successAudio.loop = true; // 계속 성공 중이면 소리 반복
-        let isSoundPlaying = false;
-
+        successAudio.loop = true; 
+        const pullingAudio = new Audio('pulling.mp3'); 
+        
+        let isSuccessPlaying = false;
         let isFrontCamera = true;
         let currentStream = null;
         let pose = null;
         let isRunning = false;
 
-        // 좌표 변환
+        let prevForearmDist = 0;
+        let lastPullTime = 0;
+
         function toPixel(landmark, width, height) {
             return { x: landmark.x * width, y: landmark.y * height };
         }
 
-        // 각도 및 편차 계산 함수들
+        function getDistance(p1, p2) {
+            return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
+        }
+
         function calculateAngle(a, b, c) {
             const radians = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
             let angle = Math.abs(radians * 180.0 / Math.PI);
             if (angle > 180.0) angle = 360 - angle;
             return angle;
         }
-
         function calculateVerticalDeviation(a, b) {
             const dx = Math.abs(b.x - a.x);
             const dy = Math.abs(b.y - a.y);
-            const radians = Math.atan2(dx, dy); 
-            return radians * 180.0 / Math.PI;
+            return Math.atan2(dx, dy) * 180.0 / Math.PI;
         }
-
         function calculateHorizontalDeviation(a, b) {
             const dy = b.y - a.y;
             const dx = b.x - a.x;
-            let angle = Math.atan2(dy, dx) * 180.0 / Math.PI;
-            angle = Math.abs(angle); 
+            let angle = Math.abs(Math.atan2(dy, dx) * 180.0 / Math.PI);
             if (angle > 90) angle = Math.abs(180 - angle);
             return angle;
         }
 
-        // === [커스텀 그리기 함수: 스틱맨] ===
         function drawLine(ctx, p1, p2, color, width) {
             if (!p1 || !p2) return;
             ctx.beginPath();
@@ -190,29 +182,20 @@
         }
 
         function drawStickFigure(ctx, p, color) {
-            const lineWidth = 6; // 선 두께
-
-            // 1. 머리 (몸통과 이어지는 1자 스틱 형태)
-            // 코(0)와 어깨중심을 잇는 선
+            const lineWidth = 6;
             if (p[0] && p[11] && p[12]) {
-                const shoulderMidX = (p[11].x + p[12].x) / 2;
-                const shoulderMidY = (p[11].y + p[12].y) / 2;
-                drawLine(ctx, {x: shoulderMidX, y: shoulderMidY}, p[0], color, lineWidth);
+                const midX = (p[11].x + p[12].x) / 2;
+                const midY = (p[11].y + p[12].y) / 2;
+                drawLine(ctx, {x: midX, y: midY}, p[0], color, lineWidth);
             }
-
-            // 2. 몸통 (어깨 - 엉덩이)
-            drawLine(ctx, p[11], p[12], color, lineWidth); // 어깨 선
-            drawLine(ctx, p[11], p[23], color, lineWidth); // 왼 몸통
-            drawLine(ctx, p[12], p[24], color, lineWidth); // 오른 몸통
-            drawLine(ctx, p[23], p[24], color, lineWidth); // 골반 선
-
-            // 3. 팔 (어깨 - 팔꿈치 - 손목)
+            drawLine(ctx, p[11], p[12], color, lineWidth);
+            drawLine(ctx, p[11], p[23], color, lineWidth);
+            drawLine(ctx, p[12], p[24], color, lineWidth);
+            drawLine(ctx, p[23], p[24], color, lineWidth);
             drawLine(ctx, p[11], p[13], color, lineWidth);
             drawLine(ctx, p[13], p[15], color, lineWidth);
             drawLine(ctx, p[12], p[14], color, lineWidth);
             drawLine(ctx, p[14], p[16], color, lineWidth);
-
-            // 4. 다리 (엉덩이 - 무릎 - 발목)
             drawLine(ctx, p[23], p[25], color, lineWidth);
             drawLine(ctx, p[25], p[27], color, lineWidth);
             drawLine(ctx, p[24], p[26], color, lineWidth);
@@ -233,81 +216,130 @@
             if (results.poseLandmarks) {
                 const rawLm = results.poseLandmarks;
                 const p = {};
-                // 필요한 모든 포인트 변환 (코:0 포함)
                 [0, 11,12,13,14,15,16,23,24,25,26,27,28].forEach(idx => {
                     if(rawLm[idx]) p[idx] = toPixel(rawLm[idx], width, height);
                 });
 
-                // === [엄격한 기준] ===
-                const BODY_TILT_LIMIT = 5;      
-                const ARM_HORIZON_LIMIT = 15;   
-                const ELBOW_STRAIGHT_MIN = 165; 
-                const KNEE_STRAIGHT_MIN = 170;  
+                // === 설정값 ===
+                const BODY_TILT_LIMIT = 10;      
+                const HEAD_TILT_LIMIT = 15;      
+                const ARM_HORIZON_LIMIT = 20;    
+                const ELBOW_STRAIGHT_MIN = 160; 
+                const KNEE_STRAIGHT_MIN = 165;  
 
-                let isBodyReady = false;
-                let isArmReady = false;
+                let isSuccess = false;
                 let failReason = "";
+                let pullArmIndex = 0; 
 
-                if(p[11] && p[23] && p[27] && p[12] && p[24] && p[28]) {
-                    // 1. 몸 수직
+                if(p[0] && p[11] && p[23] && p[27] && p[12] && p[24] && p[28]) {
+                    
+                    // 1. 머리 수직
+                    const midShoulder = { x: (p[11].x + p[12].x)/2, y: (p[11].y + p[12].y)/2 };
+                    const headTilt = calculateVerticalDeviation(midShoulder, p[0]);
+                    const isHeadStraight = headTilt < HEAD_TILT_LIMIT;
+
+                    // 2. 몸 수직
                     const lTorso = calculateVerticalDeviation(p[11], p[23]);
                     const lLeg = calculateVerticalDeviation(p[23], p[27]);
                     const lKnee = calculateAngle(p[23], p[25], p[27]);
-                    
                     const rTorso = calculateVerticalDeviation(p[12], p[24]);
                     const rLeg = calculateVerticalDeviation(p[24], p[28]);
                     const rKnee = calculateAngle(p[24], p[26], p[28]);
 
-                    const leftBodyOk = (lTorso < BODY_TILT_LIMIT) && (lLeg < BODY_TILT_LIMIT) && (lKnee > KNEE_STRAIGHT_MIN);
-                    const rightBodyOk = (rTorso < BODY_TILT_LIMIT) && (rLeg < BODY_TILT_LIMIT) && (rKnee > KNEE_STRAIGHT_MIN);
+                    const isBodyStraight = (lTorso < BODY_TILT_LIMIT && lLeg < BODY_TILT_LIMIT && lKnee > KNEE_STRAIGHT_MIN) ||
+                                           (rTorso < BODY_TILT_LIMIT && rLeg < BODY_TILT_LIMIT && rKnee > KNEE_STRAIGHT_MIN);
 
-                    isBodyReady = leftBodyOk || rightBodyOk;
+                    // 3. 팔꿈치 위치 검사 (양궁 자세: 팔꿈치는 몸 밖으로 나가야 함)
+                    // 몸통의 좌우 경계 (어깨 기준)
+                    const bodyMinX = Math.min(p[11].x, p[12].x); // 왼쪽(화면상) 끝
+                    const bodyMaxX = Math.max(p[11].x, p[12].x); // 오른쪽(화면상) 끝
+                    
+                    // 팔꿈치가 몸통 범위(bodyMinX ~ bodyMaxX) 안에 있는지 확인
+                    const isLeftElbowIn = (p[13].x > bodyMinX && p[13].x < bodyMaxX);
+                    const isRightElbowIn = (p[14].x > bodyMinX && p[14].x < bodyMaxX);
 
-                    // 2. 팔 수평
-                    const lElbow = calculateAngle(p[11], p[13], p[15]);
-                    const rElbow = calculateAngle(p[12], p[14], p[16]);
+                    // 두 팔꿈치가 모두 몸통 안에 있으면 -> 실패 (Guard 자세나 움츠린 자세)
+                    const isElbowsTooIn = isLeftElbowIn && isRightElbowIn;
+
+                    // 4. 팔 수평/펴짐 검사
                     const lHorizon = calculateHorizontalDeviation(p[11], p[15]);
                     const rHorizon = calculateHorizontalDeviation(p[12], p[16]);
+                    const lElbow = calculateAngle(p[11], p[13], p[15]);
+                    const rElbow = calculateAngle(p[12], p[14], p[16]);
 
-                    const leftArmOk = (lElbow > ELBOW_STRAIGHT_MIN) && (lHorizon < ARM_HORIZON_LIMIT);
-                    const rightArmOk = (rElbow > ELBOW_STRAIGHT_MIN) && (rHorizon < ARM_HORIZON_LIMIT);
+                    const isLeftStraight = (lHorizon < ARM_HORIZON_LIMIT) && (lElbow > ELBOW_STRAIGHT_MIN);
+                    const isRightStraight = (rHorizon < ARM_HORIZON_LIMIT) && (rElbow > ELBOW_STRAIGHT_MIN);
 
-                    isArmReady = leftArmOk || rightArmOk;
-
-                    if (!isBodyReady) failReason = "BODY TILT DETECTED";
-                    else if (!isArmReady) failReason = "ARM NOT HORIZONTAL";
+                    // === 종합 판단 ===
+                    if (!isHeadStraight) failReason = "HEAD TILTED";
+                    else if (!isBodyStraight) failReason = "BODY TILTED";
+                    else if (isElbowsTooIn) failReason = "OPEN ELBOWS"; // 팔꿈치를 밖으로 벌리세요
+                    else if (isLeftStraight && !isRightStraight) {
+                        isSuccess = true;
+                        pullArmIndex = 2; // 오른팔 당김
+                    } else if (isRightStraight && !isLeftStraight) {
+                        isSuccess = true;
+                        pullArmIndex = 1; // 왼팔 당김
+                    } else if (isLeftStraight && isRightStraight) {
+                        failReason = "BEND DRAW ARM"; // 당기는 팔은 굽혀야 함
+                    } else {
+                        failReason = "RAISE BOW ARM"; // 활 든 팔은 펴야 함
+                    }
                 }
 
-                const isSuccess = isBodyReady && isArmReady;
-                let color = "#FF0000"; // RED
+                let color = isSuccess ? "#00FF00" : "#FF0000";
 
                 if (isSuccess) {
-                    color = "#00FF00"; // GREEN
-                    messageDiv.innerText = "SUCCESS";
+                    messageDiv.innerText = "READY TO SHOOT";
                     messageDiv.style.borderColor = "#00FF00";
                     messageDiv.style.color = "#00FF00";
-                    debugDiv.innerText = "PERFECT POSE";
                     
-                    // 소리 재생 로직
-                    if (!isSoundPlaying) {
-                        successAudio.play().catch(e => console.log("Sound play error", e));
-                        isSoundPlaying = true;
+                    if (!isSuccessPlaying) {
+                        successAudio.play().catch(()=>{});
+                        isSuccessPlaying = true;
                     }
+
+                    // === 당기기(Forearm Shortening) 로직 ===
+                    let currentForearmDist = 0;
+                    if (pullArmIndex === 1) currentForearmDist = getDistance(p[15], p[13]);
+                    if (pullArmIndex === 2) currentForearmDist = getDistance(p[16], p[14]);
+
+                    if (prevForearmDist > 0) {
+                        const diff = prevForearmDist - currentForearmDist;
+                        // 0.5픽셀 이상 줄어들면 당기는 중
+                        if (diff > 0.5) {
+                            const now = Date.now();
+                            let delay = Math.max(80, 500 - (diff * 40)); 
+
+                            if (now - lastPullTime > delay) {
+                                const sound = pullingAudio.cloneNode();
+                                sound.volume = 1.0; 
+                                sound.play().catch(()=>{});
+                                lastPullTime = now;
+                            }
+                            debugDiv.innerText = `DRAWING: ${diff.toFixed(1)}`;
+                        } else {
+                            debugDiv.innerText = "HOLDING";
+                        }
+                    } else {
+                        debugDiv.innerText = "SET";
+                    }
+                    prevForearmDist = currentForearmDist;
+
                 } else {
-                    messageDiv.innerText = failReason || "STAND STRAIGHT";
+                    messageDiv.innerText = failReason || "ARCHERY STANCE";
                     messageDiv.style.borderColor = "#FF0000";
                     messageDiv.style.color = "#FFFFFF";
-                    debugDiv.innerText = "KEEP TRYING";
+                    debugDiv.innerText = "FIX POSTURE";
 
-                    // 소리 중지 로직
-                    if (isSoundPlaying) {
+                    if (isSuccessPlaying) {
                         successAudio.pause();
-                        successAudio.currentTime = 0; // 처음으로 되감기
-                        isSoundPlaying = false;
+                        successAudio.currentTime = 0;
+                        isSuccessPlaying = false;
                     }
+                    prevForearmDist = 0;
                 }
 
-                // 스틱맨 그리기 호출
                 drawStickFigure(canvasCtx, p, color);
             }
             canvasCtx.restore();
@@ -335,7 +367,7 @@
         }
 
         async function initPose() {
-            messageDiv.innerText = "LOADING MODEL...";
+            messageDiv.innerText = "LOADING...";
             pose = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
             pose.setOptions({ modelComplexity: 1, smoothLandmarks: true, enableSegmentation: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5 });
             pose.onResults(onResults);
@@ -345,16 +377,11 @@
             messageDiv.innerText = "READY";
         }
 
-        // 시작 버튼 이벤트 (소리 권한 때문에 필수)
         startOverlay.addEventListener('click', () => {
             startOverlay.style.display = 'none';
             isRunning = true;
-            // 빈 소리를 한번 재생해서 오디오 권한 획득
-            successAudio.play().then(() => {
-                successAudio.pause();
-                successAudio.currentTime = 0;
-            }).catch(() => {});
-            
+            successAudio.play().then(()=>successAudio.pause()).catch(()=>{});
+            pullingAudio.play().then(()=>pullingAudio.pause()).catch(()=>{});
             initPose();
         });
 
@@ -365,7 +392,6 @@
             videoElement.play();
             switchBtn.innerText = "CAM SWITCH";
         });
-
     </script>
 </body>
 </html>
