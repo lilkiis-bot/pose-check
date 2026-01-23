@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Forearm Shortening Sound</title>
+    <title>Pulling Sound Effect</title>
     <style>
         body {
             margin: 0;
@@ -34,7 +34,7 @@
         video { z-index: 1; }
         canvas { z-index: 2; }
 
-        /* UI 스타일: 각지게 */
+        /* UI 스타일 */
         #status-box {
             position: absolute;
             top: 20px;
@@ -134,7 +134,7 @@
         // 오디오 객체
         const successAudio = new Audio('success.mp3');
         successAudio.loop = true; 
-        const pullingAudio = new Audio('pulling.mp3'); // "디"
+        const pullingAudio = new Audio('pulling.mp3'); // "디" 소리
         
         let isSuccessPlaying = false;
         let isFrontCamera = true;
@@ -143,7 +143,7 @@
         let isRunning = false;
 
         // 당기기 감지 변수
-        let prevForearmDist = 0; // 이전 하박 길이 (손목-팔꿈치)
+        let prevPullDist = 0; // 이전 (손목-어깨) 거리
         let lastPullTime = 0;
 
         function toPixel(landmark, width, height) {
@@ -234,7 +234,7 @@
 
                 let isSuccess = false;
                 let failReason = "";
-                let pullArmIndex = 0; // 1:왼팔당김, 2:오른팔당김 (0:없음)
+                let pullArmIndex = 0; // 1:왼팔당김(굽힘), 2:오른팔당김(굽힘)
 
                 if(p[0] && p[11] && p[23] && p[27] && p[12] && p[24] && p[28]) {
                     
@@ -292,23 +292,28 @@
                         isSuccessPlaying = true;
                     }
 
-                    // === 🔥 [핵심 변경: 하박 길이 줄어듦 감지] 🔥 ===
-                    let currentForearmDist = 0;
+                    // === 🔥 [수정된 부분: 손목과 어깨 거리 감소 감지] 🔥 ===
+                    let currentPullDist = 0;
                     
-                    // 왼팔 당김 (굽은 팔이 왼쪽일 때) -> 왼쪽 하박 길이 측정 (손목15 - 팔꿈치13)
-                    if (pullArmIndex === 1) currentForearmDist = getDistance(p[15], p[13]);
-                    // 오른팔 당김 (굽은 팔이 오른쪽일 때) -> 오른쪽 하박 길이 측정 (손목16 - 팔꿈치14)
-                    if (pullArmIndex === 2) currentForearmDist = getDistance(p[16], p[14]);
+                    // 왼팔이 굽은 상태 -> 왼쪽 손목(15)과 왼쪽 어깨(11) 거리 측정
+                    if (pullArmIndex === 1) {
+                        currentPullDist = getDistance(p[15], p[11]);
+                    }
+                    // 오른팔이 굽은 상태 -> 오른쪽 손목(16)과 오른쪽 어깨(12) 거리 측정
+                    if (pullArmIndex === 2) {
+                        currentPullDist = getDistance(p[16], p[12]);
+                    }
 
-                    if (prevForearmDist > 0) {
-                        // 이전 길이보다 현재 길이가 짧아졌으면 = 줄어듦 = 당김
-                        const diff = prevForearmDist - currentForearmDist;
+                    if (prevPullDist > 0) {
+                        // 이전 거리 - 현재 거리
+                        // 값이 양수(+)면 거리가 줄어듦 (당김)
+                        // 값이 음수(-)면 거리가 늘어남 (폅)
+                        const diff = prevPullDist - currentPullDist;
 
-                        // diff가 양수면 줄어들고 있다는 뜻
-                        // 0.5픽셀 이상 줄어들 때만 반응 (떨림 방지)
+                        // 0.5픽셀 이상 줄어들 때만 소리 재생
                         if (diff > 0.5) {
                             const now = Date.now();
-                            // 많이 줄어들수록(diff가 클수록) 딜레이 작게 = 빠르게 재생
+                            // 당기는 속도(diff)에 따라 소리 재생 간격 조절
                             let delay = Math.max(80, 500 - (diff * 40)); 
 
                             if (now - lastPullTime > delay) {
@@ -317,7 +322,9 @@
                                 sound.play().catch(()=>{});
                                 lastPullTime = now;
                             }
-                            debugDiv.innerText = `PULL SPEED: ${diff.toFixed(1)}`;
+                            debugDiv.innerText = `PULLING: ${diff.toFixed(1)}`;
+                        } else if (diff < -0.5) {
+                            debugDiv.innerText = "EXTENDING...";
                         } else {
                             debugDiv.innerText = "HOLDING...";
                         }
@@ -326,7 +333,7 @@
                     }
                     
                     // 현재 길이를 저장
-                    prevForearmDist = currentForearmDist;
+                    prevPullDist = currentPullDist;
 
                 } else {
                     messageDiv.innerText = failReason || "FIX POSTURE";
@@ -339,7 +346,7 @@
                         successAudio.currentTime = 0;
                         isSuccessPlaying = false;
                     }
-                    prevForearmDist = 0; // 실패하면 길이 초기화
+                    prevPullDist = 0; // 실패하면 거리 초기화
                 }
 
                 drawStickFigure(canvasCtx, p, color);
